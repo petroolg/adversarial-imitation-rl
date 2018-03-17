@@ -38,7 +38,7 @@ class BlackHole:
         self.image[list(zip(self.black_hole.T))] = 0
         self.dang_region = self.dang_region.tolist()
 
-
+        #
         # for s in self.states:
         #     plt.text(s[0]-0.5,s[1],str(self.strategy[tuple(s)]))
         #     plt.arrow(s[0], s[1], 0.3*self.strategy[tuple(s)][0], 0.3*self.strategy[tuple(s)][1], head_width=0.1, head_length=0.2)
@@ -98,6 +98,7 @@ class BlackHole:
             # self.image[tuple(self.goal)] = 2
             # plt.imshow(im.T)
             # plt.show()
+            out_file.close()
 
 
     def prepare_strategy(self):
@@ -142,7 +143,8 @@ class BlackHole:
     def refresh(self):
         self.game_over = False
         # self.state = np.random.randint(0,self.N-1,[2],dtype=int)
-        self.state = self.start.copy()
+        choices = list(set([tuple(s) for s in self.states]) - set([tuple(s) for s in self.black_hole]) - set(tuple(self.goal)))
+        self.state = np.array(choices[np.random.choice(len(choices))])
         print(self.state)
 
 
