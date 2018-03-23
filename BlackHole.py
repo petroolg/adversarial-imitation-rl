@@ -13,12 +13,12 @@ class BlackHole:
         self.N = bh+border*2
         x = np.arange(self.N)
         xv, yv = np.meshgrid(x, x)
-        self.states = (np.dstack([xv,yv]).reshape([self.N**2,2])).tolist()
+        self.states = (np.dstack([xv,yv]).reshape([self.N**2,2]))
 
-        self.actions = [[-1,0],[0,1],[1,0],[0,-1]] #left, up, right, down
-        self.start = [2, 0]
+        self.actions = np.array([[-1,0],[0,1],[1,0],[0,-1]]) #left, up, right, down
+        self.start = np.array([2, 0])
         # self.goal = [self.N-2, int(self.N/2)]
-        self.goal = [self.N//2,self.N-1]
+        self.goal = np.array([self.N//2,self.N-1])
         self.state = self.start
         self.black_hole = np.array([s for s in self.states if abs(s[0] - self.N//2) <= bh / 2 and abs(s[1] - self.N // 2) <= bh / 2])
         self.dang_region = np.array([s for s in self.states if abs(s[0] - self.N//2) <= bh/2+1 and abs(s[1] - self.N//2 ) <= bh/2+1])
@@ -71,7 +71,7 @@ class BlackHole:
                 self.Q[(tuple(s),tuple(a))] = 0
 
     def is_out_of_bounds(self, state):
-        return not np.array(state).tolist() in self.states
+        return not np.array(state).tolist() in self.states.tolist()
 
     def is_in_dang_region(self,state):
         return np.array(state).tolist() in self.black_hole.tolist()
@@ -119,6 +119,9 @@ class BlackHole:
         self.strategy[list(zip(self.dang_region.T))] = -self.gradient[list(zip(self.dang_region.T))]
         # self.strategy += np.array([[(self.goal[0]-s[0])**2,(self.goal[1]-s[1])**2] for s in self.states]).reshape([self.N,self.N,2])
         # self.strategy = np.sign(self.strategy)
+        str_file = open('strategy.txt', 'w+')
+        str_file.writelines('\n'.join([str((t[0].tolist(), t[1].tolist())) for t in zip(self.states, self.strategy.reshape((self.N*self.N,2)))]))
+        str_file.close()
 
     def prepare_gradient(self):
         self.gradient = np.zeros([self.N, self.N, 2])
@@ -143,13 +146,13 @@ class BlackHole:
     def refresh(self):
         self.game_over = False
         # self.state = np.random.randint(0,self.N-1,[2],dtype=int)
-        choices = list(set([tuple(s) for s in self.states]) - set([tuple(s) for s in self.black_hole]) - set(tuple(self.goal)))
+        choices = list(set([tuple(s) for s in self.states]) - set([tuple(s) for s in self.black_hole]) - set([tuple(self.goal)]))
         self.state = np.array(choices[np.random.choice(len(choices))])
         print(self.state)
 
 
 if __name__ == '__main__':
     bh = BlackHole(1, 2)
-    bh.record_trajectories(100)
+    bh.record_trajectories(300)
     # k = np.loadtxt('trajectories/traj0.csv',dtype=int, delimiter=',')
     # print(k)
