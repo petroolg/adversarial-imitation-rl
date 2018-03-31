@@ -49,7 +49,7 @@ def one_hot(states, N):
 class SGDRegressor_occupancy:
     def __init__(self, N, xd, n_pairs):
         lr = 10e-2
-        lambda_ = 0.001
+        lambda_ = 0.01
 
         # self.sa_pairs = prepare_sa(N)
         # self.n_pairs, xd = self.sa_pairs.shape
@@ -78,6 +78,16 @@ class SGDRegressor_occupancy:
         Dw0 = tf.nn.sigmoid(tf.matmul(self.sa_pairs, self.w0)+self.b0)
         # Dw1 = tf.nn.sigmoid(tf.matmul(Dw0, self.w1) + self.b1)
         self.Dw = tf.nn.sigmoid(tf.matmul(Dw0, self.w2) + self.b2)
+       #  self.Dw = tf.constant(np.array([[1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 1.  ,
+       # 0.01, 1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 0.01, 1.  , 1.  , 0.01,
+       # 1.  , 1.  , 0.01, 1.  , 1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 1.  ,
+       # 1.  , 1.  , 0.01, 1.  , 1.  , 0.01, 1.  , 1.  , 0.01, 1.  , 1.  ,
+       # 0.01, 1.  , 1.  , 1.  , 1.  , 1.  , 1.  , 1.  , 1.  , 1.  , 1.  ,
+       # 0.01, 1.  , 1.  , 1.  , 1.  , 1.  , 1.  , 0.01, 1.  , 0.01, 1.  ,
+       # 1.  , 1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 1.  , 1.  , 0.01, 1.  ,
+       # 0.01, 1.  , 1.  , 1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 1.  , 0.01,
+       # 1.  , 1.  , 1.  , 0.01, 1.  , 1.  , 1.  , 0.01, 1.  , 0.01, 1.  ,
+       # 1.  ]], dtype=np.float32).T)
         self.cost_D = tf.matmul(self.occ_measure,tf.log(self.Dw)) + tf.matmul(self.expert_occ_measure, tf.log(1.0-self.Dw))
 
         pi0 = tf.nn.sigmoid(self.theta0+self.btheta0)
@@ -86,8 +96,8 @@ class SGDRegressor_occupancy:
 
         # prediction and cost of policy
         self.H = -tf.reduce_sum(tf.multiply(self.pi, tf.log(self.pi)))
-        self.Q = tf.matmul(self.occ_measure_for_Q,tf.log(self.Dw),transpose_a=True)
-        # self.Q = tf.log(self.Dw)
+        # self.Q = tf.matmul(self.occ_measure_for_Q,tf.log(self.Dw))
+        self.Q = tf.log(self.Dw)
         self.piQ = tf.multiply(tf.log(self.pi),self.Q)
 
         self.cost_pi = tf.matmul(self.occ_measure,self.piQ) #- lambda_*self.H
@@ -279,8 +289,13 @@ def sample_trajectories(game, model):
     fin = one_hot(np.hstack((game.goal, [0, 0])),N)[0]
 
     policy = model.predict_action_prob()
+    # policy = np.array([[0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+    #    0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1,
+    #    0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
+    #    0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0,
+    #    0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]]).T
     # print('Policy: ' + '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), policy.tolist()))))
-    while len(trajectories)<100:
+    while len(trajectories)<20:
         traj = []
         state = start.copy()
         game_over = False
@@ -292,7 +307,8 @@ def sample_trajectories(game, model):
                 probs.append(p)
             # print(probs)]
             # print(p, np.exp(probs), np.sum(np.exp(probs)))
-            ind = np.random.choice(range(4), p=np.exp(probs) / np.sum(np.exp(probs)))
+            # print(probs)
+            ind = np.random.choice(range(4), p=probs/sum(probs))
             # ind = np.argmax(probs)
             action = actions[ind]
             old_state = np.hstack((state[:-4], action))
@@ -327,8 +343,10 @@ def show_om(OM, to_file = False, filename = None):
         savepath = 'images/{}.png'.format(filename)
         plt.savefig(savepath)
         # print("File {} created.".format(savepath))
+        plt.close()
     else:
         plt.show()
+
 
 def delete_imgs(folder):
     for the_file in os.listdir(folder):
@@ -359,10 +377,17 @@ def plot_graphs(path):
     fig = plt.figure(figsize=(20,20))
     for i, graph_name  in enumerate(zip(graphs, graph_names)):
         plt.subplot(221+i)
-        plt.plot(graph_name[0])
+        plt.plot(run_avg(graph_name[0]))
         plt.title(graph_name[1])
     plt.savefig(path)
 
+
+def run_avg(lst, bin=20):
+    out = []
+    l = len(lst)
+    for i in range(l):
+        out.append(np.mean(lst[max(0, i-bin):min(l-1, i+bin)]))
+    return out
 
 if __name__ == '__main__':
     expert_traj = []

@@ -120,7 +120,7 @@ class BlackHole:
         # self.strategy += np.array([[(self.goal[0]-s[0])**2,(self.goal[1]-s[1])**2] for s in self.states]).reshape([self.N,self.N,2])
         # self.strategy = np.sign(self.strategy)
         str_file = open('strategy.txt', 'w+')
-        str_file.writelines('\n'.join([str((t[0].tolist(), t[1].tolist())) for t in zip(self.states, self.strategy.reshape((self.N*self.N,2)))]))
+        str_file.writelines('\n'.join([str((t[0].tolist(), t[1].tolist())) for t in zip(self.states, self.strategy.reshape((self.N*self.N,2),order='F'))]))
         str_file.close()
 
     def prepare_gradient(self):
