@@ -161,32 +161,6 @@ class SGDRegressor_occupancy:
     def comp_log_Dw(self):
         return self.session.run(tf.log(1.0 - self.Dw), feed_dict={self.sa_pairs: sa_pairs})
 
-    def show_bastards(self, OM, QOM, eOM):
-
-        policy_cost = self.session.run(self.cost_pi, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.occ_measure: np.atleast_2d(OM), self.sa_pairs: sa_pairs})
-        discr_cost = self.session.run(self.cost_D, feed_dict={self.occ_measure: np.atleast_2d(OM),self.expert_occ_measure: np.atleast_2d(eOM), self.sa_pairs: sa_pairs})
-        entropy = self.session.run(self.H, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM),
-                                                                         self.occ_measure: np.atleast_2d(OM),
-                                                                         self.expert_occ_measure: np.atleast_2d(eOM),
-                                                                         self.sa_pairs: sa_pairs})
-
-        # logging.debug('\n Occ measure:\n' + '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), OM.tolist()))))
-
-        # logging.debug('\nQ\n '+ '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), self.session.run(self.Q, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.occ_measure: np.atleast_2d(OM), self.expert_occ_measure: np.atleast_2d(eOM), self.sa_pairs: sa_pairs}).tolist()))))
-        # logging.debug('\npiQ\n ' + '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), self.session.run(self.piQ, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.occ_measure: np.atleast_2d(OM), self.expert_occ_measure: np.atleast_2d(eOM), self.sa_pairs: sa_pairs}).tolist()))))
-        logging.debug('costD ' + str(discr_cost))
-        logging.debug('H ' + str(entropy))
-        logging.debug('costpi ' + str(policy_cost))
-        graphs[2].append(policy_cost[0,0])
-        graphs[3].append(discr_cost[0,0])
-        # graphs[4].append(entropy)
-
-
-# def occupancy_measure_exact(state_action, traj, policy):
-#     prob = policy.predict(state_action)
-#     max_d = max([len(t) for t in traj.shape[0]])
-#     for i in range(max_d):
-#
 
 def predict_sa_prob(state_action,traj):
     n_taken, n_diff = 0, 0
@@ -437,9 +411,6 @@ if __name__ == '__main__':
 
         # Take a policy step from θi to θi+1, using the TRPO rule with cost function log(Dwi+1 (s, a)).
         QOM = occ_meaure_Q(agent_trajs)
-        # model.show_bastards(OM, QOM)
         model.partial_fit_policy(OM, QOM)
-        # model.show_bastards(OM, QOM)
 
         measure_perf(expert_traj, model, agent_trajs)
-        model.show_bastards(OM, QOM, eOM)
