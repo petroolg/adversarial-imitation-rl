@@ -1,33 +1,27 @@
+import logging
+import os
+
 import numpy as np
 import tensorflow as tf
-import os
-import logging
-from BlackHole import *
+from coridor_game import *
 
-N = 5
+N = 10
 GAMMA = 0.9
 
 graph_names = ['Mean D-score for agent', 'Mean D-score for expert', 'Policy cost', 'Discriminator cost']
 graphs = [[],[],[],[]]
 
 def prepare_sa(N):
-    return np.eye(N*N*4)
+    return np.eye(N*2)
 
 def from_onehot_to_raw(states, N):
     states = np.atleast_2d(states)
     slen = states.shape[0]
-    one_ind = np.array([pos.index(1) for pos in states.tolist()])
-    state_ind = one_ind//4
-    x = state_ind//N
-    y = state_ind%N
-    a_ind = np.array(one_ind%4)*2-3
-    act = np.zeros((slen,2))
-    act[a_ind == -3, 1] = -1
-    act[a_ind == 3, 1] = 1
-    act[a_ind == 1, 0] = 1
-    act[a_ind == -1, 0] = -1
+    state_ind = np.array([pos.index(1) for pos in states.tolist()])[np.newaxis].T
+    x = state_ind//2
+    a = [[-1] if i==0 else [1] for i in state_ind%2]
 
-    return np.hstack((x[np.newaxis].T,y[np.newaxis].T,act))
+    return np.hstack((x,a))
 
 sa_pairs = prepare_sa(N)
 sa_pairs_raw = from_onehot_to_raw(sa_pairs,N)
@@ -36,16 +30,17 @@ def one_hot(states, N):
     # print(states)
     states = np.atleast_2d(states)
     slen = states.shape[0]
-    out = np.zeros([slen, N * N * 4])
-    st = 4*(states[:,0]*N+states[:,1]).astype(int)
-    k = states[:,-2:]
-    out[range(slen), st+((k[:,1]*3+k[:,0]+3)/2).astype(int)] = 1.0
+    out = np.zeros([slen, N*2])
+    st = (states[:,0]*2).astype(int)
+
+    actions = np.array([0 if i == -1 else 1 for i in states[:,0]])[np.newaxis].T
+    out[range(slen), st+actions] = 1.0
     return out
 
 class SGDRegressor_occupancy:
-    def __init__(self, N, xd, n_pairs):
+    def __init__(self, N, xd):
         lr = 10e-2
-        lambda_ = 0.001
+        lambda_ = 0.0
 
         # self.sa_pairs = prepare_sa(N)
         # self.n_pairs, xd = self.sa_pairs.shape
@@ -59,18 +54,18 @@ class SGDRegressor_occupancy:
         self.occ_measure = tf.placeholder(tf.float32, shape=(None), name='OM')
         self.occ_measure_for_Q = tf.placeholder(tf.float32, shape=(None,None), name='QOM')
 
-        self.theta0 = tf.Variable(tf.zeros(shape=[xd, 1]), name='theta0')
-        self.btheta0 = tf.Variable(tf.zeros(shape=[1]), name='btheta0')
+        self.theta0 = tf.Variable(0.5*tf.ones(shape=[xd, 1]), name='theta0')
 
         # make prediction and cost of discriminator
-        self.Dw = tf.nn.sigmoid(tf.matmul(self.sa_pairs, self.w0)+self.b0)
+        self.Dw = tf.nn.sigmoid(tf.matmul(self.sa_pairs,self.w0))
+        # self.Dw = tf.constant(np.tile(np.array([[1.0],[0.0001]],dtype=np.float32).T,10).T)
         self.cost_D = tf.matmul(self.occ_measure,tf.log(self.Dw)) + tf.matmul(self.expert_occ_measure, tf.log(1.0-self.Dw))
 
-        self.pi = tf.nn.sigmoid(tf.matmul(self.sa_pairs, self.theta0)+self.btheta0)
+        self.pi = self.theta0
 
         # prediction and cost of policy
         self.H = -tf.reduce_sum(tf.multiply(self.pi, tf.log(self.pi)))
-        self.Q = tf.matmul(self.occ_measure_for_Q,tf.log(self.Dw),transpose_a=True)
+        self.Q = tf.matmul(self.occ_measure_for_Q,tf.log(self.Dw))
         # self.Q = tf.log(self.Dw)
         self.piQ = tf.multiply(tf.log(self.pi),self.Q)
 
@@ -78,9 +73,9 @@ class SGDRegressor_occupancy:
 
         # ops we want to call later
         optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-        optimizer2 = tf.train.AdamOptimizer(learning_rate=0.01)
+        optimizer2 = tf.train.AdamOptimizer(learning_rate=lr)
         self.train_D = optimizer.minimize(-self.cost_D)
-        self.train_pi = optimizer2.minimize(self.cost_pi, var_list=[self.theta0, self.btheta0])
+        self.train_pi = optimizer2.minimize(self.cost_pi, var_list=[self.theta0])
 
         self.grad_D = optimizer.compute_gradients(self.cost_D)
         self.grad_pi = optimizer2.compute_gradients(self.cost_pi, var_list=[self.theta0])
@@ -94,110 +89,76 @@ class SGDRegressor_occupancy:
         self.session.run(self.train_D, feed_dict={self.occ_measure:np.atleast_2d(OM),self.expert_occ_measure:np.atleast_2d(eOM), self.sa_pairs: sa_pairs})
 
     def partial_fit_policy(self, OM, QOM):
-        # policyb = self.session.run(self.pi, feed_dict={self.sa_pairs: sa_pairs})
-        # grads = self.session.run(self.grad_pi, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.occ_measure: np.atleast_2d(OM), self.sa_pairs: sa_pairs})
+        policyb = self.session.run(self.pi, feed_dict={self.sa_pairs: sa_pairs})
+        grads = self.session.run(self.grad_pi, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.occ_measure: np.atleast_2d(OM), self.sa_pairs: sa_pairs})
+        Q = self.session.run(self.Q, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.sa_pairs: sa_pairs})
+        pi = self.session.run(self.pi, feed_dict={self.sa_pairs: sa_pairs})
+        thetab = self.session.run(self.theta0)
+        Dw = self.session.run(self.Dw, feed_dict={self.sa_pairs:sa_pairs})
         # for g in grads:
         #     for sg in g:
         #         if len(sg) > 1:
         #             plt.imshow(sg)
         #             plt.colorbar()
         #             plt.show()
+
         self.session.run(self.train_pi, feed_dict={self.occ_measure_for_Q: np.atleast_2d(QOM), self.occ_measure: np.atleast_2d(OM), self.sa_pairs: sa_pairs})
-        # policy = self.session.run(self.pi, feed_dict={self.sa_pairs: sa_pairs})
-        # print('Policy: ' + '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), (policy-policyb).tolist(), policy.tolist()))))
+        thetaa = self.session.run(self.theta0)
+        policy = self.session.run(self.pi, feed_dict={self.sa_pairs: sa_pairs})
+        print('Policy: ' + '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), (policy-policyb).tolist(), policy.tolist()))))
 
     def predict_action_prob(self):
         # print('Predict action prob: ', state_action.shape)
-        policy =  self.session.run(self.pi, feed_dict={self.sa_pairs: sa_pairs})
+        policy = self.session.run(self.pi)
         return policy
 
     def comp_Dw(self):
         # print('Predict action prob: ', state_action.shape)
         return self.session.run(self.Dw, feed_dict={self.sa_pairs: sa_pairs})
 
+    def comp_Dw_part(self, sa):
+        # print('Predict action prob: ', state_action.shape)
+        # sapairs = from_onehot_to_raw(sa,N)
+        # out = np.array([int(a<0) for a in sapairs[:,1]])[np.newaxis].T
+        # return out
+        return self.session.run(self.Dw, feed_dict={self.sa_pairs: sa})
+
     def get_omega(self):
         w0 = self.session.run(self.w0)
-        # w1 = self.session.run(self.w1)
-        w2 = self.session.run(self.w2)
-        return w0, w2
+        return w0
 
     def get_theta(self):
         theta0 = self.session.run(self.theta0)
-        # theta1 = self.session.run(self.theta1)
-        theta2 = self.session.run(self.theta2)
-        return theta0, theta2
-
-
-    def comp_Dw_part(self, sa):
-        # print('Predict action prob: ', state_action.shape)
-        return self.session.run(self.Dw, feed_dict={self.sa_pairs: sa})
-
-    def comp_log_Dw(self):
-        return self.session.run(tf.log(1.0 - self.Dw), feed_dict={self.sa_pairs: sa_pairs})
-
-def predict_sa_prob(state_action,traj):
-    n_taken, n_diff = 0, 0
-    for trajectory in traj:
-        for sa in trajectory:
-            if (sa == state_action).all():
-                n_taken += 1
-            elif (sa[:-4] == state_action[:-4]).all():
-                n_diff += 1
-    if (n_taken+n_diff) == 0:
-        return 0
-    else:
-        return n_taken/(n_taken+n_diff)
+        return theta0
 
 def occupancy_measure_approx_vector(traj):
-    prob = np.zeros(N*N*4)
+    prob = np.zeros(N*2)
     if len(traj)==0:
         return prob
     max_d = max([np.array(t).shape[0] for t in traj])
 
-    sa_x_traj = np.zeros((max_d, N*N))
-    sa_a_traj = np.zeros((N*N, 4))
+    sa_x_traj = np.zeros((max_d, N))
+    sa_a_traj = np.zeros((N, 2))
     for t in traj:
         for i, sa in enumerate(t):
-            ind = sa_pairs.tolist().index(sa.tolist())//4
+            ind = sa.tolist().index(1)//2
             sa_x_traj[i,ind] += 1.0
-            sa_a_traj[ind] += sa.tolist()[ind*4:ind*4+4]
-    state_probs = np.nan_to_num(sa_x_traj.T/sa_x_traj.sum(axis=1))
+            sa_a_traj[ind] += sa.tolist()[ind*2:ind*2+2]
+    state_probs = np.nan_to_num(sa_x_traj.T / sa_x_traj.sum(axis=1))
     act_probs = np.nan_to_num(sa_a_traj.T / sa_a_traj.sum(axis=1))
     prob = np.dot(np.array([GAMMA**i for i in range(max_d)]), state_probs.T)
     # prob = np.dot(predict_sa_prob_vector(traj), prob)
-    prob = np.repeat(prob, 4)*np.reshape(act_probs, (N*N*4),order='F')
+    prob = np.repeat(prob, 2)*np.reshape(act_probs, (N*2),order='F')
     return prob
-
-def occupancy_measure_approx(state_action, traj):
-    prob = 0
-    if len(traj)==0:
-        return 0
-    max_d = max([np.array(t).shape[0] for t in traj])
-    for i in range(max_d):
-        n_this, n_diff = 0,0
-        for t in traj:
-            if np.atleast_2d(t).shape[0] > i and (t[i] == state_action).all():
-                n_this += 1
-            else:
-                n_diff += 1
-        prob += GAMMA**i*n_this/(n_this+n_diff)
-    prob *= predict_sa_prob(state_action, traj)
-    return prob
-
-def occ_measure(traj):
-    om = []
-    for sa in sa_pairs:
-        om.append(occupancy_measure_approx(sa, traj))
-    return np.array(om)
 
 def crop_traj(sa, traj):
     new_traj = []
     for t in traj:
-        # if np.array(sa).tolist() in np.array(t).tolist():
-        #     i = np.array(t).tolist().index(np.array(sa).tolist())
-        #     new_traj.append(t[i:])
-        if np.array(sa).tolist() in np.array(t).tolist() and np.array(t).tolist().index(np.array(sa).tolist()) == 0:
-            new_traj.append(t)
+        if np.array(sa).tolist() in np.array(t).tolist():
+            i = np.array(t).tolist().index(np.array(sa).tolist())
+            new_traj.append(t[i:])
+        # if np.array(sa).tolist() in np.array(t).tolist() and np.array(t).tolist().index(np.array(sa).tolist()) == 0:
+        #     new_traj.append(t)
     return np.array(new_traj)
 
 
@@ -207,13 +168,13 @@ def occ_meaure_Q(traj):
         new_traj = crop_traj(sa, traj)
         oms=occupancy_measure_approx_vector(new_traj)
         om.append(oms)
-        show_om(oms,to_file=False)
+        # show_om(oms,to_file=False)
     Q = np.array(om)
     # Q[Q<1e-5] = 1e-5
     # print(Q)
     return Q
 
-def make_move(state, action, game:BlackHole):
+def make_move(state, action, game):
     newstate = state + action
     # fort = np.random.rand() < 0.5
 
@@ -223,41 +184,39 @@ def make_move(state, action, game:BlackHole):
     #     return state,False
     # if fort:
     #     newstate += game.gradient[tuple(newstate.astype(int))].astype(int)
-    if game.is_in_dang_region(newstate):
-        return state, True
     if game.is_out_of_bounds(newstate):
         return state,False
     return newstate, False
 
 def sample_trajectories(game, model):
     trajectories=[]
-    actions = np.arange(4)
-    start= one_hot(np.hstack((game.start, [0, 0])),N)[0]
-    fin = one_hot(np.hstack((game.goal, [0, 0])),N)[0]
+    actions = np.eye(4)
+    fin = game.length
 
     policy = model.predict_action_prob()
     # print('Policy: ' + '\n'.join(str(e) for e in list(zip(sa_pairs_raw.tolist(), policy.tolist()))))
     while len(trajectories)<100:
         traj = []
-        state = start.copy()
+        state_i = np.random.choice(range(game.length-2))
+        state = np.zeros(N*2)
+        state[state_i*2] = 1
         game_over = False
         ts = 0
-        while not (state.tolist().index(1) == fin.tolist().index(1)) and not game_over and ts < 30:
+        while not state.tolist().index(1)//2 == fin and not game_over and ts < 30:
             probs = []
-            for a in actions:
-                p = policy[state.tolist().index(1)//4+a,0]
+            for i in range(2):
+                p = policy[(state.tolist().index(1)//2)*2+i,0]
                 probs.append(p)
             # print(probs)]
             # print(p, np.exp(probs), np.sum(np.exp(probs)))
-            ind = np.random.choice(range(4), p=np.exp(probs) / np.sum(np.exp(probs)))
+            action = np.random.choice(range(2), p=np.exp(probs) / np.sum(np.exp(probs)))
             # ind = np.argmax(probs)
-            action = actions[ind]
-            old_state = np.zeros(N*N*4)
-            old_state[state.tolist().index(1)//4+a] = 1.0
+            old_state = np.zeros(N*2)
+            old_state[(state.tolist().index(1)//2)*2+action] = 1.0
             traj.append(old_state.copy())
             sa = from_onehot_to_raw(old_state, N)[0]
-            sa, game_over = make_move(sa[:2], sa[2:],game)
-            state = np.hstack((sa,[0,0]))
+            sa, game_over = make_move(sa[0], sa[1], game)
+            state = np.array([sa,-1])
             state = one_hot(state, N)[0]
             ts += 1
         trajectories.append(traj)
@@ -265,26 +224,23 @@ def sample_trajectories(game, model):
 
 def show_om(OM, to_file = False, filename = None):
     plt.clf()
-    image = np.zeros((10*N, 10*N))
-    x, y = np.meshgrid(np.arange(10*N), np.arange(10*N))
+    image = np.zeros((10, 10*N))
+    x, y = np.meshgrid(np.arange(10*N), np.arange(10))
     for sa, om in zip(sa_pairs_raw, OM):
         if om > 0:
-            if (sa[-2:] == [1,0]).all(): # right
-                image[((y - 10 * sa[1] + 5 > x - 10 * sa[0]) & ((y - 10 * (sa[1]) - 15) < -(x - 10 * sa[0]))& (x >= 10 * (sa[0] + 1) - 3))] = om
-            if (sa[-2:] == [-1,0]).all(): # left
-                image[((y - 10 * sa[1] - 5 < x - 10 * sa[0]) & ((y - 10 * (sa[1]) - 5) > -(x - 10 * sa[0]))& (x <= 10 * sa[0] + 3))] = om
-            if (sa[-2:] == [0,-1]).all(): # down
-                image[((y - 10 * sa[1] + 5 > x - 10 * sa[0]) & ((y - 10 * (sa[1]) - 5) > -(x - 10 * sa[0])) & (y <= 10 * (sa[1]) + 3))] = om
-            if (sa[-2:] == [0,1]).all(): # up
-                image[((y - 10 * sa[1] - 5 < x - 10 * sa[0]) & ((y - 10 * (sa[1]) - 15) < -(x - 10 * sa[0])) & (y >= 10 * (sa[1] + 1) - 3))] = om
+            if sa[1] == 1: # right
+                image[((y + 5 > x - 10 * sa[0]) & ((y - 15) < -(x - 10 * sa[0]))& (x >= 10 * (sa[0] + 1) - 3))] = om
+            if sa[1] == -1: # left
+                image[((y - 5 < x - 10 * sa[0]) & ((y - 5) > -(x - 10 * sa[0]))& (x <= 10 * sa[0] + 3))] = om
             # print(sa, om)
     plt.imshow(image)
     plt.colorbar()
     print(filename)
     if to_file:
-        savepath = 'images/{}.png'.format(filename)
+        savepath = 'cor_images/{}.png'.format(filename)
         plt.savefig(savepath)
         # print("File {} created.".format(savepath))
+        plt.close()
     else:
         plt.show()
 
@@ -299,9 +255,13 @@ def delete_imgs(folder):
             print(e)
 
 def measure_perf(expert_traj, model, agent_trajs):
-    agent_score = np.mean(model.comp_Dw_part(agent_trajs[0]))
-    expert_score = np.mean(model.comp_Dw_part(expert_traj[0]))
-    logging.debug('Mean D for expert_traj: ' +str(expert_score))
+    ag, ex = [], []
+    for i in range(5):
+        ag.append(model.comp_Dw_part(agent_trajs[i]).ravel())
+        ex.append(model.comp_Dw_part(expert_traj[0]))
+    agent_score = np.mean(ag)
+    expert_score = np.mean(ex)
+    logging.debug('Mean D for expert_traj: ' + str(expert_score))
     logging.debug('Mean D for agent_traj: ' + str(agent_score))
     graphs[0].append(agent_score)
     graphs[1].append(expert_score)
@@ -317,29 +277,35 @@ def plot_graphs(path):
     fig = plt.figure(figsize=(20,20))
     for i, graph_name  in enumerate(zip(graphs, graph_names)):
         plt.subplot(221+i)
-        plt.plot(graph_name[0])
+        plt.plot(run_avg(graph_name[0]))
         plt.title(graph_name[1])
     plt.savefig(path)
+    plt.close()
 
+def run_avg(lst, bin=20):
+    out = []
+    l = len(lst)
+    for i in range(l):
+        out.append(np.mean(lst[max(0, i-bin):min(l-1, i+bin)]))
+    return out
 
 if __name__ == '__main__':
     expert_traj = []
-    model = SGDRegressor_occupancy(N, N*N*4, 0)
-    game = BlackHole(1,2)
+    model = SGDRegressor_occupancy(N, N*2)
+    game = Coridor(10)
 
-    for i, t in enumerate(os.listdir('trajectories')):
-        raw_traj = np.loadtxt('trajectories/' + t, dtype=int, delimiter=',')
+    for i, t in enumerate(os.listdir('cor_trajectories')):
+        raw_traj = np.loadtxt('cor_trajectories/' + t, dtype=int, delimiter=',')
         onehot_traj = one_hot(raw_traj, N)
         expert_traj.append(onehot_traj)
-        print((from_onehot_to_raw(onehot_traj,N)==raw_traj).all())
 
     expert_traj = np.array(expert_traj)
     # eOM = occ_measure(expert_traj)
     eOM = occupancy_measure_approx_vector(expert_traj)
     show_om(eOM)
 
-    delete_imgs('images/')
-    logging.basicConfig(filename='images/black_hole.log', level=logging.DEBUG)
+    delete_imgs('cor_images/')
+    logging.basicConfig(filename='cor_images/coridor.log', level=logging.DEBUG)
 
     for i in range(10000):
         print('{}/1000'.format(i))
@@ -367,7 +333,7 @@ if __name__ == '__main__':
             policy = model.session.run(model.pi, feed_dict={model.sa_pairs: sa_pairs})
             print('Policy: ' + '\n'.join(
             str(e) for e in list(zip(sa_pairs_raw.tolist(), policy.tolist()))))
-            plot_graphs('images/stat_graph.png')
+            plot_graphs('cor_images/stat_graph.png')
 
         # Take a policy step from θi to θi+1, using the TRPO rule with cost function log(Dwi+1 (s, a)).
         QOM = occ_meaure_Q(agent_trajs)

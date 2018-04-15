@@ -1,7 +1,8 @@
+import logging
+import os
+
 import numpy as np
 import tensorflow as tf
-import os
-import logging
 from BlackHole import *
 
 N = 5
